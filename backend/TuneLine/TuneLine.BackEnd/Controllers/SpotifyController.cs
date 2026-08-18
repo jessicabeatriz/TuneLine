@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SpotifyAPI.Web;
+using TuneLine.BackEnd.Services;
 
 namespace TuneLine.BackEnd.Controllers
 {
@@ -9,11 +10,13 @@ namespace TuneLine.BackEnd.Controllers
     public class SpotifyController : ControllerBase
     {
         private readonly IConfiguration _configuration;
+        private readonly SpotifyService _spotifyService;
         private readonly Uri redirectUri = new Uri("https://127.0.0.1:7242/api/spotify/callback");
 
-        public SpotifyController(IConfiguration configuration)
+        public SpotifyController(IConfiguration configuration, SpotifyService spotifyService)
         {
             _configuration = configuration;
+            _spotifyService = spotifyService;
         }
 
         [HttpGet("login")]
@@ -25,7 +28,7 @@ namespace TuneLine.BackEnd.Controllers
                 LoginRequest.ResponseType.Code
             );
 
-            loginRequest.Scope = new[] { Scopes.Streaming, Scopes.UserReadEmail, Scopes.UserReadPrivate };
+            loginRequest.Scope = new[] { Scopes.Streaming, Scopes.UserReadEmail, Scopes.UserReadPrivate, Scopes.UserLibraryRead, Scopes.UserFollowRead, Scopes.PlaylistReadPrivate };
 
             var urlDeLogin = loginRequest.ToUri().ToString();
 
@@ -44,12 +47,21 @@ namespace TuneLine.BackEnd.Controllers
                     redirectUri);
 
                 var response = await new OAuthClient().RequestToken(request);
+                var spotify = new SpotifyClient(response.AccessToken);
+                var user = await spotify.UserProfile.Current();
+
+                await _spotifyService.SaveOrUpdateUserAsync(
+                    user.Id,
+                    response.AccessToken,
+                    response.RefreshToken,
+                    response.ExpiresIn
+                    );
 
                 return Ok(new
                 {
-                    message = "Sucesso",
-                    acess_token = response.AccessToken,
-                    refresh_token = response.RefreshToken
+                    message = "Usuário logado e salvo com sucesso",
+                    name = user.DisplayName,
+                    image = user.Images.Select(i => i.Url).FirstOrDefault()
                 });
 
             }
@@ -64,47 +76,32 @@ namespace TuneLine.BackEnd.Controllers
         }
 
         [HttpGet("perfil")]
-        public async Task<IActionResult> GetUserProfile(string token)
+        public async Task<IActionResult> GetUserProfile(string userId)
         {
             try
             {
-                var spotify = new SpotifyClient(token);
+                var profile = await _spotifyService.GetUserProfileAsync(userId);
 
-                var profile = await spotify.UserProfile.Current();
-
-                return Ok(new
-                {
-                    name = profile.DisplayName,
-                    email = profile.Email,
-                    plan = profile.Product
-                });
+                return Ok(profile);
             }
             catch (Exception ex)
             {
                 return BadRequest(new
                 {
                     message = "Erro ao buscar perfil",
-                    details = ex.Message                });
+                    details = ex.Message
+                });
             }
         }
         
         [HttpGet("track/{id}")]
-        public async Task<IActionResult> GetTrack (string token, string id)
+        public async Task<IActionResult> GetTrack (string userId, string id)
         {
             try
             {
-                var spotify = new SpotifyClient(token);
-                
-                var track = await spotify.Tracks.Get(id);
+                var track = await _spotifyService.GetTrackAsync(userId, id);
 
-                return Ok(new
-                {
-                    name = track.Name,
-                    artists = track.Artists.Select(artist => artist.Name).ToList(),
-                    album = track.Album.Images[0],
-                    link = track.ExternalUrls["spotify"],
-                    release_date = track.Album.ReleaseDate
-                });
+                return Ok(track);
 
             }
             catch(Exception ex)
@@ -118,18 +115,21 @@ namespace TuneLine.BackEnd.Controllers
             }
         }
 
-        [HttpGet("users-track")]
-        public async Task<IActionResult> GetUsersSavedTracks (string token)
+        [HttpGet("games-tracks")]
+        public async Task<IActionResult> GetTracksForGame(string userId)
         {
             try
             {
-                var spotify = new SpotifyClient(token);
-                var songs = spotify.Library.GetTracks();
-                return Ok();
+                var gameData = await _spotifyService.GetTracksForGameAsync(userId);
+                return Ok(gameData);
             }
             catch(Exception ex)
             {
-                return BadRequest();
+                return BadRequest(new
+                {
+                    message = "Erro ao gerar músicas para o jogo",
+                    details = ex.Message
+                });
             }
         }
         
